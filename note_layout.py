@@ -82,22 +82,31 @@ def plan_layout(matches, monitors, width=360, height=240, gap=12, margin=16, mon
         minimum = lambda item, axis: math.ceil(item[1]["minimum"][axis] * m["dpi"] / by_device[item[1]["device"]]["dpi"])
         w = max(px(width), *(minimum(i, 0) for i in items))
         h = max(px(height), *(minimum(i, 1) for i in items))
-        # Margin and gap apply to the visible frame, not the invisible resize borders,
-        # while outer rectangles stay inside the work area and never overlap.
-        insets = [frame_insets(i[1], by_device[i[1]["device"]]["dpi"], m["dpi"]) for i in items]
-        il, it, ir, ib = (max(side) for side in zip(*insets))
-        step_x, step_y = max(w - il - ir + g, w), max(h - it - ib + g, h)
-        left, top = l + max(pad - il, 0), t + max(pad - it, 0)
-        right, bottom = r - max(pad - ir, 0), b - max(pad - ib, 0)
-        rows = (bottom - top - h) // step_y + 1 if bottom - top >= h else 0
-        cols = (right - left - w) // step_x + 1 if right - left >= w else 0
+        # Grid lines are VISIBLE frame edges; each window's own invisible borders convert
+        # them to its outer rect. Every note gets at least the requested margin and gap,
+        # outer rects stay inside the work area and never overlap, whatever borders mix.
+        insets = {i[0]: frame_insets(i[1], by_device[i[1]["device"]]["dpi"], m["dpi"]) for i in items}
+        il, it, ir, ib = zip(*insets.values())
+        vw = [w - left - right for left, _, right, _ in insets.values()]
+        vh = [h - top - bottom for _, top, _, bottom in insets.values()]
+        # Column/row pitch: visible gap >= g, and outer edges of any two neighbours apart.
+        step_x = max(max(vw) + g, w + max(ir) - min(ir))
+        step_y = max(max(vh) + g, h + max(it) - min(it))
+        first_right = r - max(pad, max(ir))   # visible right edge of column 0
+        first_top = t + max(pad, max(it))     # visible top edge of row 0
+        # Space the last column/row needs: visible size plus margin, or its outer border.
+        need_x = max(v + max(pad, left) for v, left in zip(vw, il))
+        need_y = max(v + max(pad, bottom) for v, bottom in zip(vh, ib))
+        cols = (first_right - l - need_x) // step_x + 1 if first_right - l >= need_x else 0
+        rows = (b - first_top - need_y) // step_y + 1 if b - first_top >= need_y else 0
         if rows < 1 or cols < 1 or rows * cols < len(items):
             raise ValueError("Notes do not fit the work area; choose smaller dimensions or another monitor")
         # Quantize horizontal position into existing columns, then preserve vertical order.
         items.sort(key=lambda i: (-round(i[1]["rect"][0] / max(1, w)), i[1]["rect"][1], i[0]))
         for index, (note_id, window) in enumerate(items):
             col, row = divmod(index, rows)
-            rect = [right - w - col * step_x, top + row * step_y, w, h]
+            _, top_inset, right_inset, _ = insets[note_id]
+            rect = [first_right - col * step_x + right_inset - w, first_top + row * step_y - top_inset, w, h]
             result.append({"id": note_id, "rect": rect, "device": device})
     return result
 

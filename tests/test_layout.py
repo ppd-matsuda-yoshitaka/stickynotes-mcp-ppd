@@ -353,3 +353,45 @@ def test_unrestorable_layout_requires_opt_in(live):
     # The backup records the offscreen geometry, but restoring it is still refused.
     with pytest.raises(ValueError, match="work area changed"):
         server.restore_note_layout(result["snapshot_id"])
+
+
+def with_borders(index, borders, rect=None):
+    left, top, right, bottom = borders
+    w = window(index, rect=rect or [1450, index * 100, 360, 240])
+    x, y, width, height = w["rect"]
+    w["frame"] = [x + left, y + top, width - left - right, height - top - bottom]
+    return w
+
+
+def visible_frame(target, borders):
+    left, top, right, bottom = borders
+    x, y, w, h = target["rect"]
+    return [x + left, y + top, w - left - right, h - top - bottom]
+
+
+def test_mixed_borders_reported_case_keeps_full_right_margin():
+    # A 7 px-bordered note must not shrink the margin of a borderless one (was 9 px).
+    monitors = [monitor()]
+    matches = {"bordered": with_borders(0, (7, 0, 7, 7)), "plain": with_borders(1, (0, 0, 0, 0))}
+    for target in layout.plan_layout(matches, monitors):
+        frame = visible_frame(target, (7, 0, 7, 7) if target["id"] == "bordered" else (0, 0, 0, 0))
+        assert 1920 - (frame[0] + frame[2]) == 16 and frame[1] >= 16
+
+
+@pytest.mark.parametrize("margin", [0, 5, 16])
+@pytest.mark.parametrize("gap", [0, 12])
+@pytest.mark.parametrize("mix", [((7, 0, 7, 7), (0, 0, 0, 0)), ((0, 0, 0, 0), (7, 0, 7, 7)),
+                                 ((7, 0, 7, 7), (3, 2, 9, 5), (0, 0, 0, 0))])
+def test_mixed_borders_never_below_requested_margin_or_gap(margin, gap, mix):
+    monitors = [monitor(work=(0, 0, 1920, 1040))]
+    borders = {str(i): mix[i % len(mix)] for i in range(9)}
+    matches = {k: with_borders(int(k), b) for k, b in borders.items()}
+    targets = layout.plan_layout(matches, monitors, gap=gap, margin=margin)
+    assert_separated(targets, monitors)  # Outer rects inside and non-overlapping.
+    frames = [visible_frame(t, borders[t["id"]]) for t in targets]
+    for x, y, w, h in frames:
+        assert x >= margin and y >= margin and 1920 - (x + w) >= margin and 1040 - (y + h) >= margin
+    for i, a in enumerate(frames):
+        for b in frames[:i]:
+            assert (a[0] + a[2] + gap <= b[0] or b[0] + b[2] + gap <= a[0] or
+                    a[1] + a[3] + gap <= b[1] or b[1] + b[3] + gap <= a[1])
