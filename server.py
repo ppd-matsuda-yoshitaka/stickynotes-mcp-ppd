@@ -3,8 +3,9 @@
 Read tools (list / get / search) are always available and open the database
 read-only. Write tools (create / append) are registered only when
 STICKY_NOTES_ENABLE_WRITE=1. They never change or remove existing lines.
-Before every write they also refuse to run while the Sticky Notes app is
-open, and they take a consistent backup of the database first.
+Before every database write they refuse to run while the Sticky Notes app is
+open, and take a consistent backup. Independent opt-in layout tools operate
+only on live windows with identity checks and geometry snapshots.
 """
 
 import os
@@ -19,6 +20,8 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
+
+import note_layout
 
 # .NET DateTime.Ticks epoch (0001-01-01 00:00:00 UTC)
 TICKS_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
@@ -255,8 +258,8 @@ def summarize(row: sqlite3.Row, text: str) -> dict[str, Any]:
 
 app = MCPServer(
     name="sticky-notes-ppd",
-    version="0.2.0",
-    description="Access to Windows Microsoft Sticky Notes (read; optional create/append)",
+    version="0.3.0",
+    description="Windows Sticky Notes: read; optional create/append and reversible window layout",
 )
 
 
@@ -415,9 +418,117 @@ def append_to_note(note_id: str, text: str) -> dict[str, Any]:
     return {"id": note_id, "updated_at": ticks_to_iso(ticks), "backup": str(backup)}
 
 
+LAYOUT_WRITE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False,
+)
+
+
+def layout_enabled() -> None:
+    if os.getenv(note_layout.LAYOUT_ENV) != "1":
+        raise PermissionError(f"Set {note_layout.LAYOUT_ENV}=1 to enable layout tools")
+
+
+def layout_context(note_ids: list[str] | None = None):
+    layout_enabled()
+    rows = fetch_notes(None, None, False)
+    # UIA exposes plain text; remove control words without introducing Markdown.
+    def plain(raw):
+        return "\n".join(RE_TOKEN.sub(lambda m: m[3] if m[3] is not None else "",
+                                    RE_LINE_ID.sub("", line)) for line in (raw or "").split("\n"))
+    universe = [{"id": r["Id"], "body": plain(r["Text"])} for r in rows]
+    if note_ids is None:
+        ids = {r["Id"] for r in rows if r["IsOpen"]}
+    else:
+        if not note_ids or len(set(note_ids)) != len(note_ids):
+            raise ValueError("note_ids must be nonempty and unique")
+        ids = set(note_ids)
+    notes = [n for n in universe if n["id"] in ids]
+    if not notes or len(notes) != len(ids):
+        raise ValueError("No open notes, or a requested note is missing/deleted")
+    backend = note_layout.WindowsBackend()
+    state = backend.scan()
+    matches = note_layout.match_windows(notes, state["windows"], universe)
+    if note_ids is None and len(matches) != len(state["windows"]):
+        raise ValueError("Some visible note editors are not uniquely matched to saved open notes")
+    return backend, state, matches
+
+
+def inspect_note_layout(note_ids: list[str] | None = None) -> dict[str, Any]:
+    """Read physical-pixel rectangles, minimum sizes, monitor work areas and DPI.
+
+    Matches full plain text uniquely to saved notes. Any ambiguity aborts.
+    Default selects all saved open notes. Does not change windows or the database.
+    """
+    _, state, matches = layout_context(note_ids)
+    return {"monitors": state["monitors"], "notes": [
+        {"id": key, "rect": w["rect"], "frame": w["frame"], "device": w["device"], "minimum": w["minimum"]}
+        for key, w in matches.items()]}
+
+
+def save_note_layout(note_ids: list[str] | None = None) -> dict[str, Any]:
+    """Save current manual window layout for restore_note_layout without moving it.
+
+    Returns an opaque snapshot_id. Saves geometry/window identity/monitor metadata, no text.
+    Default selects all saved open notes; app must be running in this desktop session.
+    """
+    _, state, matches = layout_context(note_ids)
+    return {"snapshot_id": note_layout.save_snapshot(matches, state["monitors"]), "count": len(matches)}
+
+
+def arrange_notes(note_ids: list[str] | None = None, width: int = 360, height: int = 240,
+                  gap: int = 12, margin: int = 16, monitor_device: str | None = None,
+                  dry_run: bool = True) -> dict[str, Any]:
+    """Stack notes at the RIGHT edge, top to bottom, adding columns to the left.
+
+    Dimensions/gaps/margins are DPI-independent pixels (DIP). Keeps each note's
+    current monitor unless monitor_device is specified (from inspect_note_layout).
+    Preserves approximate existing column/vertical order. Refuses insufficient space.
+    dry_run=True previews only; False saves recovery geometry before moving windows.
+    No text/color/database changes, app restarts, focus changes or background watcher.
+    """
+    backend, state, matches = layout_context(note_ids)
+    targets = note_layout.plan_layout(matches, state["monitors"], width, height, gap, margin, monitor_device)
+    selected = {w["hwnd"] for w in matches.values()}
+    obstacles = [w for w in state["windows"] if w["hwnd"] not in selected]
+    if any(note_layout.overlaps(t["rect"], w["rect"]) for t in targets for w in obstacles):
+        raise ValueError("Arrangement would overlap an unselected note; select all notes or another monitor")
+    if dry_run:
+        return {"dry_run": True, "notes": targets, "monitors": state["monitors"]}
+    return note_layout.apply_layout(backend, matches, state["monitors"], targets)
+
+
+def restore_note_layout(snapshot_id: str, dry_run: bool = True) -> dict[str, Any]:
+    """Restore saved physical-pixel geometry by note ID, re-identifying live windows.
+
+    Requires saved monitor work areas and DPI to be unchanged. Any missing note,
+    ambiguous identity, unsafe offscreen target or new minimum-size conflict aborts all moves.
+    A recorded invisible border overflow (<=16 DIP) is allowed only for the same
+    live window instance/monitor, with an onscreen visible frame and unchanged borders.
+    Original coordinates are restored exactly, never silently corrected.
+    dry_run=True previews; False saves a fresh recovery snapshot before restoration.
+    Manual overlapping layouts are restored exactly as saved.
+    """
+    layout_enabled()
+    saved = note_layout.load_snapshot(snapshot_id)
+    targets = saved["notes"]
+    backend, state, matches = layout_context([t["id"] for t in targets])
+    if sorted(saved["monitors"], key=lambda m: m["device"]) != sorted(state["monitors"], key=lambda m: m["device"]):
+        raise ValueError("Monitor work areas or DPI changed; preview a fresh arrangement")
+    note_layout.validate_targets(matches, state["monitors"], targets)
+    if dry_run:
+        return {"dry_run": True, "notes": targets}
+    return note_layout.apply_layout(backend, matches, state["monitors"], targets)
+
+
 if write_enabled():
     app.add_tool(create_note, annotations=ADDITIVE_WRITE)
     app.add_tool(append_to_note, annotations=ADDITIVE_WRITE)
+
+if os.getenv(note_layout.LAYOUT_ENV) == "1":
+    app.add_tool(inspect_note_layout, annotations=READ_ONLY)
+    app.add_tool(save_note_layout, annotations=LAYOUT_WRITE)
+    app.add_tool(arrange_notes, annotations=LAYOUT_WRITE)
+    app.add_tool(restore_note_layout, annotations=LAYOUT_WRITE)
 
 
 def main() -> None:

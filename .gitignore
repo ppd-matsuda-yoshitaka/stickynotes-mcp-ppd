@@ -5,6 +5,7 @@ build/
 dist/
 .venv/
 .pytest_cache/
+.test-tmp*/
 
 # Never commit note databases or exports
 *.sqlite

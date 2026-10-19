@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sticky-notes-mcp-readonly"
-version = "0.2.0"
-description = "MCP server for Windows Microsoft Sticky Notes (read-only by default; optional create/append)"
+version = "0.3.0"
+description = "Windows Sticky Notes MCP (read-only by default; optional create/append and window layout)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -21,7 +21,7 @@ test = ["pytest>=8"]
 sticky-notes-mcp-readonly = "server:main"
 
 [tool.hatch.build.targets.wheel]
-include = ["server.py"]
+include = ["server.py", "note_layout.py", "windows_layout.ps1", "windows_layout.cs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
