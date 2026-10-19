@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sticky-notes-mcp-readonly"
-version = "0.1.0"
-description = "Read-only MCP server for Windows Microsoft Sticky Notes"
+version = "0.2.0"
+description = "MCP server for Windows Microsoft Sticky Notes (read-only by default; optional create/append)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
