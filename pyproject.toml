@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sticky-notes-mcp-readonly"
+version = "0.1.0"
+description = "Read-only MCP server for Windows Microsoft Sticky Notes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=2.3,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+sticky-notes-mcp-readonly = "server:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["server.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
