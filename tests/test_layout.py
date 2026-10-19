@@ -307,3 +307,49 @@ def test_disconnected_monitor_restore_refused_without_move(live):
     with pytest.raises(ValueError, match="DPI changed"):
         server.restore_note_layout(saved["snapshot_id"], dry_run=False)
     assert backend.calls == []
+
+
+def bordered(index, rect):
+    # Geometry observed from the real app at 96 DPI: 7 px invisible left/right/bottom borders.
+    w = window(index, rect=rect)
+    w["frame"] = [rect[0] + 7, rect[1], rect[2] - 14, rect[3] - 7]
+    return w
+
+
+def visible(target):
+    x, y, w, h = target["rect"]
+    return [x + 7, y, w - 14, h - 7]
+
+
+def test_margins_and_gaps_apply_to_visible_frame():
+    monitors = [monitor()]
+    matches = {str(i): bordered(i, [1450, i * 100, 360, 240]) for i in range(5)}
+    targets = layout.plan_layout(matches, monitors)
+    assert_separated(targets, monitors)
+    first, second, next_col = (visible(t) for t in (targets[0], targets[1], targets[4]))
+    assert 1920 - (first[0] + first[2]) == 16 and first[1] == 16
+    assert second[1] - (first[1] + first[3]) == 12
+    # Borders (7+7) exceed the gap, so outer rectangles touch rather than overlap.
+    assert first[0] - (next_col[0] + next_col[2]) == 14
+
+
+def test_zero_margin_keeps_outer_rect_inside_work_area():
+    monitors = [monitor()]
+    targets = layout.plan_layout({"0": bordered(0, [1450, 0, 360, 240])}, monitors, margin=0)
+    assert targets[0]["rect"][0] + 360 == 1920
+    assert_separated(targets, monitors)
+
+
+def test_unrestorable_layout_requires_opt_in(live):
+    backend, _, _ = live
+    backend.state["windows"][0]["rect"][0] = 1800
+    backend.state["windows"][0]["frame"][0] = 1800
+    assert server.arrange_notes()["unrestorable"] == ["0"]
+    with pytest.raises(ValueError, match="allow_unrestorable"):
+        server.arrange_notes(dry_run=False)
+    assert backend.calls == []
+    result = server.arrange_notes(dry_run=False, allow_unrestorable=True)
+    assert result["unrestorable"] == ["0"] and len(backend.calls) == 1
+    # The backup records the offscreen geometry, but restoring it is still refused.
+    with pytest.raises(ValueError, match="work area changed"):
+        server.restore_note_layout(result["snapshot_id"])

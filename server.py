@@ -477,13 +477,15 @@ def save_note_layout(note_ids: list[str] | None = None) -> dict[str, Any]:
 
 def arrange_notes(note_ids: list[str] | None = None, width: int = 360, height: int = 240,
                   gap: int = 12, margin: int = 16, monitor_device: str | None = None,
-                  dry_run: bool = True) -> dict[str, Any]:
+                  dry_run: bool = True, allow_unrestorable: bool = False) -> dict[str, Any]:
     """Stack notes at the RIGHT edge, top to bottom, adding columns to the left.
 
     Dimensions/gaps/margins are DPI-independent pixels (DIP). Keeps each note's
     current monitor unless monitor_device is specified (from inspect_note_layout).
     Preserves approximate existing column/vertical order. Refuses insufficient space.
     dry_run=True previews only; False saves recovery geometry before moving windows.
+    Refuses if a note's current geometry could not be restored later (e.g. partly
+    offscreen); allow_unrestorable=True arranges anyway and lists those note IDs.
     No text/color/database changes, app restarts, focus changes or background watcher.
     """
     backend, state, matches = layout_context(note_ids)
@@ -493,8 +495,12 @@ def arrange_notes(note_ids: list[str] | None = None, width: int = 360, height: i
     if any(note_layout.overlaps(t["rect"], w["rect"]) for t in targets for w in obstacles):
         raise ValueError("Arrangement would overlap an unselected note; select all notes or another monitor")
     if dry_run:
-        return {"dry_run": True, "notes": targets, "monitors": state["monitors"]}
-    return note_layout.apply_layout(backend, matches, state["monitors"], targets)
+        preview = {"dry_run": True, "notes": targets, "monitors": state["monitors"]}
+        unrestorable = note_layout.unrestorable_ids(matches, state["monitors"])
+        if unrestorable:
+            preview["unrestorable"] = unrestorable
+        return preview
+    return note_layout.apply_layout(backend, matches, state["monitors"], targets, allow_unrestorable)
 
 
 def restore_note_layout(snapshot_id: str, dry_run: bool = True) -> dict[str, Any]:

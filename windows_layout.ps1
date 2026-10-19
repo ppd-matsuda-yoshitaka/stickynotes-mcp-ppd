@@ -29,15 +29,18 @@ try {
                 ($found[0].rect -join ',') -cne ($e.rect -join ',') -or
                 ($found[0].frame -join ',') -cne ($e.frame -join ',')) { throw 'Note identity/body/geometry changed; no windows moved' }
         }
+        # Inspect only the target window; a full rescan per move is quadratic.
+        function SameNote($current, $expected) {
+            return ($null -ne $current -and $current.identity -ceq $expected.identity -and $current.body -ceq $expected.body)
+        }
         $attempted = [System.Collections.Generic.List[object]]::new()
         try {
             foreach ($move in $request.moves) {
                 # Recheck identity immediately before each action as well.
-                $current = @([StickyLayoutNative]::Scan() | Where-Object { $_.hwnd -eq $move.expected.hwnd })
-                if ($current.Count -ne 1 -or $current[0].identity -cne $move.expected.identity -or
-                    $current[0].body -cne $move.expected.body -or
-                    ($current[0].rect -join ',') -cne ($move.expected.rect -join ',') -or
-                    ($current[0].frame -join ',') -cne ($move.expected.frame -join ',')) { throw 'Note changed during layout' }
+                $current = [StickyLayoutNative]::Inspect($move.expected.hwnd)
+                if (-not (SameNote $current $move.expected) -or
+                    ($current.rect -join ',') -cne ($move.expected.rect -join ',') -or
+                    ($current.frame -join ',') -cne ($move.expected.frame -join ',')) { throw 'Note changed during layout' }
                 $attempted.Add($move)
                 [StickyLayoutNative]::Move($move.expected.hwnd, [int[]]$move.rect)
             }
@@ -56,9 +59,7 @@ try {
             for ($i=$attempted.Count-1; $i -ge 0; $i--) {
                 $move=$attempted[$i]
                 try {
-                    $current = @([StickyLayoutNative]::Scan() | Where-Object { $_.hwnd -eq $move.expected.hwnd })
-                    if ($current.Count -ne 1 -or $current[0].identity -cne $move.expected.identity -or
-                        $current[0].body -cne $move.expected.body) { throw 'Identity changed; rollback refused' }
+                    if (-not (SameNote ([StickyLayoutNative]::Inspect($move.expected.hwnd)) $move.expected)) { throw 'Identity changed; rollback refused' }
                     [StickyLayoutNative]::Move($move.expected.hwnd, [int[]]$move.expected.rect)
                 } catch { $rollbackFailures.Add("$($move.expected.hwnd): $($_.Exception.Message)") }
             }
