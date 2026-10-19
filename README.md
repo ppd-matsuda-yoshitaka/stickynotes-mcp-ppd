@@ -66,4 +66,4 @@ MCP クライアントの設定（`mcpServers` 形式の例）。パスは実際
 
 ## 経緯
 
-[widisaadi/stickynotes-mcp](https://github.com/widisaadi/stickynotes-mcp) をレビューした結果を受けて、書き込み機能を持たない最小構成として書き直したものです。元のコードは流用していません。
+[widisaadi/stickynotes-mcp](https://github.com/widisaadi/stickynotes-mcp)（MIT License）をレビューした結果を受けて、書き込み機能を持たない最小構成として、それを参考に書き直したものです。一部の関数と定数は元のコードと同じ形をしています。元のプロジェクトの著作権表示とライセンス文は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) に載せています。
